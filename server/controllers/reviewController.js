@@ -7,7 +7,7 @@ async function createReview(req, res, next) {
     const comment = String(req.body.comment || "").trim().slice(0, 1000) || null;
     if (!Number.isInteger(orderId) || !Number.isInteger(rating) || rating < 1 || rating > 5) return res.status(400).json({ message: "Rating harus antara 1 sampai 5." });
     const [orders] = await pool.query(
-      `SELECT id FROM orders WHERE id = ? AND user_id = ? AND status = 'Selesai' AND appointment_status = 'Selesai'`,
+      `SELECT id FROM orders WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND status = 'Selesai' AND appointment_status = 'Selesai'`,
       [orderId, req.user.id]
     );
     if (!orders.length) return res.status(403).json({ message: "Ulasan hanya dapat dibuat setelah sesi selesai." });

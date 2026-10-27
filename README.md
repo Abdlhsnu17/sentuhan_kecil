@@ -41,8 +41,9 @@ Sentuhan Kecil adalah aplikasi web untuk katalog, pemesanan, pembayaran, dan pen
 
 ```text
 E-Comerce-Massage-main/
-├── db/
-│   └── schema.sql
+├── database/
+│   ├── schema.sql
+│   └── migrations/
 ├── docker/
 ├── docs/
 │   └── PRD.md
@@ -121,7 +122,7 @@ TRANSFER_PAYMENT_HOURS=24
 Schema membuat database `sentuhan_kecil_db`, tabel, indeks, relasi, pengaturan awal, satu terapis awal, dan katalog awal.
 
 ```bash
-mysql -u root -p < db/schema.sql
+mysql -u root -p < database/schema.sql
 ```
 
 ### 4. Buat admin pertama
@@ -272,7 +273,7 @@ Test mencakup booking, pembayaran, voucher, audit, akses order, upload, CSRF, in
 
 ## Troubleshooting
 
-- Database gagal: cek `DB_*`, pastikan MySQL aktif, lalu impor `db/schema.sql`.
+- Database gagal: cek `DB_*`, pastikan MySQL aktif, lalu impor `database/schema.sql`.
 - QRIS tidak muncul: isi `MIDTRANS_SERVER_KEY` atau `QRIS_IMAGE_URL`.
 - Email gagal: periksa host, port, secure mode, kredensial, dan `MAIL_FROM`.
 - API tidak terjangkau: akses frontend melalui server Express, bukan Live Server.

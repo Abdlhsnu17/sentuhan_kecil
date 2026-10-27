@@ -39,7 +39,7 @@ async function subscribeNewsletter(req, res, next) {
     if (!email) return res.status(400).json({ message: "Email wajib diisi." });
 
     await pool.query(
-      "INSERT INTO newsletter_subscribers (email) VALUES (?) ON DUPLICATE KEY UPDATE email = email",
+      "INSERT INTO newsletter_subscribers (email) VALUES (?) ON DUPLICATE KEY UPDATE deleted_at = NULL, deleted_by = NULL",
       [email]
     );
     res.status(201).json({ message: "Terima kasih! Kamu sudah terdaftar." });

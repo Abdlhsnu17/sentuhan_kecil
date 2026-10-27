@@ -17,8 +17,8 @@ async function readCart(cartId, connection = pool) {
             p.name, c.name AS category, p.price, p.old_price AS oldPrice,
             p.image, p.stock, p.duration_minutes AS durationMinutes
        FROM cart_items ci
-       JOIN products p ON p.id = ci.product_id
-       JOIN categories c ON c.id = p.category_id
+       JOIN products p ON p.id = ci.product_id AND p.deleted_at IS NULL
+       JOIN categories c ON c.id = p.category_id AND c.deleted_at IS NULL
       WHERE ci.cart_id = ?
       ORDER BY ci.created_at`,
     [cartId]
@@ -46,7 +46,7 @@ async function addItem(req, res, next) {
     }
 
     const [products] = await pool.query(
-      "SELECT id, name, stock FROM products WHERE id = ? AND is_active = 1",
+      "SELECT id, name, stock FROM products WHERE id = ? AND is_active = 1 AND deleted_at IS NULL",
       [productId]
     );
     if (!products.length) return res.status(404).json({ message: "Produk tidak ditemukan." });

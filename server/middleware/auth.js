@@ -37,7 +37,7 @@ async function optionalAuth(req, res, next) {
   if (token) {
     try {
       const payload = jwt.verify(token, SECRET);
-      const [users] = await pool.query("SELECT session_version AS sessionVersion FROM users WHERE id = ?", [payload.id]);
+      const [users] = await pool.query("SELECT session_version AS sessionVersion FROM users WHERE id = ? AND deleted_at IS NULL", [payload.id]);
       if (users[0] && Number(users[0].sessionVersion) === Number(payload.sv || 0)) req.user = payload;
       else res.clearCookie(TOKEN_COOKIE, { ...COOKIE_OPTIONS, maxAge: undefined });
     } catch (error) {
@@ -61,7 +61,7 @@ function requireAuth(req, res, next) {
 async function requireAdmin(req, res, next) {
   if (!req.user) return res.status(401).json({ message: "Silakan masuk terlebih dahulu." });
   try {
-    const [rows] = await pool.query("SELECT role FROM users WHERE id = ?", [req.user.id]);
+    const [rows] = await pool.query("SELECT role FROM users WHERE id = ? AND deleted_at IS NULL", [req.user.id]);
     if (rows[0]?.role !== "admin") {
       return res.status(403).json({ message: "Halaman ini khusus admin." });
     }

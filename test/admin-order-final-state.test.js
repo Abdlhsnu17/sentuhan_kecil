@@ -22,7 +22,7 @@ test("cancelled orders are final and all status mutations use the final-state gu
   assert.match(dashboard, /const isFinal = isCancelled \|\| isCompleted/);
 });
 
-test("final orders can be permanently deleted while active orders must be cancelled", () => {
+test("final orders can be archived while active orders must be cancelled", () => {
   assert.match(routes, /router\.post\("\/orders\/:id\/cancel", admin\.cancelOrder\)/);
   assert.match(routes, /router\.delete\("\/orders\/:id", admin\.deleteOrder\)/);
   assert.match(controller, /if \(!isFinalOrder\(orders\[0\]\)\)/);

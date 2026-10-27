@@ -17,6 +17,12 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
   PRIMARY KEY (filename)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Baseline ini sudah memuat soft delete; cegah migration runner menambah
+-- kolom yang sama ketika schema baru selesai diimpor.
+INSERT INTO schema_migrations (filename, checksum)
+VALUES ('022_soft_deletes.sql', 'dd432cda472507faeb3386cca8f38285e03d6f8b81385118018e109bfff2441d')
+ON DUPLICATE KEY UPDATE checksum = VALUES(checksum);
+
 CREATE TABLE IF NOT EXISTS users (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT,
   name VARCHAR(120) NOT NULL,
@@ -27,9 +33,12 @@ CREATE TABLE IF NOT EXISTS users (
   session_version INT UNSIGNED NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  deleted_at DATETIME NULL,
+  deleted_by INT UNSIGNED NULL,
   PRIMARY KEY (id),
   UNIQUE KEY uq_users_email (email),
-  KEY idx_users_role (role)
+  KEY idx_users_role (role),
+  KEY idx_users_deleted_at (deleted_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS password_reset_tokens (
@@ -68,9 +77,12 @@ CREATE TABLE IF NOT EXISTS categories (
   slug VARCHAR(140) NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  deleted_at DATETIME NULL,
+  deleted_by INT UNSIGNED NULL,
   PRIMARY KEY (id),
   UNIQUE KEY uq_categories_name (name),
-  UNIQUE KEY uq_categories_slug (slug)
+  UNIQUE KEY uq_categories_slug (slug),
+  KEY idx_categories_deleted_at (deleted_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS products (
@@ -87,9 +99,12 @@ CREATE TABLE IF NOT EXISTS products (
   is_active TINYINT(1) NOT NULL DEFAULT 1,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  deleted_at DATETIME NULL,
+  deleted_by INT UNSIGNED NULL,
   PRIMARY KEY (id),
   UNIQUE KEY uq_products_slug (slug),
   KEY idx_products_category_active (category_id, is_active),
+  KEY idx_products_deleted_at (deleted_at),
   CONSTRAINT fk_products_category FOREIGN KEY (category_id)
     REFERENCES categories (id) ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT chk_products_price CHECK (price >= 0),
@@ -168,8 +183,11 @@ CREATE TABLE IF NOT EXISTS therapists (
   is_active TINYINT(1) NOT NULL DEFAULT 1,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  deleted_at DATETIME NULL,
+  deleted_by INT UNSIGNED NULL,
   PRIMARY KEY (id),
-  KEY idx_therapists_active (is_active)
+  KEY idx_therapists_active (is_active),
+  KEY idx_therapists_deleted_at (deleted_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS coupons (
@@ -185,9 +203,12 @@ CREATE TABLE IF NOT EXISTS coupons (
   is_active TINYINT(1) NOT NULL DEFAULT 1,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  deleted_at DATETIME NULL,
+  deleted_by INT UNSIGNED NULL,
   PRIMARY KEY (id),
   UNIQUE KEY uq_coupons_code (code),
   KEY idx_coupons_active_dates (is_active, starts_at, ends_at),
+  KEY idx_coupons_deleted_at (deleted_at),
   CONSTRAINT chk_coupons_value CHECK (discount_value > 0),
   CONSTRAINT chk_coupons_usage CHECK (usage_limit IS NULL OR used_count <= usage_limit)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -230,6 +251,8 @@ CREATE TABLE IF NOT EXISTS orders (
   notes TEXT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  deleted_at DATETIME NULL,
+  deleted_by INT UNSIGNED NULL,
   PRIMARY KEY (id),
   UNIQUE KEY uq_orders_code (order_code),
   UNIQUE KEY uq_orders_guest_token (guest_access_token_hash),
@@ -237,6 +260,7 @@ CREATE TABLE IF NOT EXISTS orders (
   KEY idx_orders_schedule (appointment_date, appointment_time, therapist_id),
   KEY idx_orders_payment_expiry (payment_status, payment_due_at),
   KEY idx_orders_payment_reference (payment_reference),
+  KEY idx_orders_deleted_at (deleted_at),
   CONSTRAINT fk_orders_user FOREIGN KEY (user_id)
     REFERENCES users (id) ON UPDATE CASCADE ON DELETE SET NULL,
   CONSTRAINT fk_orders_therapist FOREIGN KEY (therapist_id)
@@ -273,10 +297,13 @@ CREATE TABLE IF NOT EXISTS service_reviews (
   is_published TINYINT(1) NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  deleted_at DATETIME NULL,
+  deleted_by INT UNSIGNED NULL,
   PRIMARY KEY (id),
   UNIQUE KEY uq_service_reviews_order (order_id),
   KEY idx_service_reviews_user (user_id),
   KEY idx_service_reviews_published (is_published, created_at),
+  KEY idx_service_reviews_deleted_at (deleted_at),
   CONSTRAINT fk_service_reviews_order FOREIGN KEY (order_id)
     REFERENCES orders (id) ON UPDATE CASCADE ON DELETE CASCADE,
   CONSTRAINT fk_service_reviews_user FOREIGN KEY (user_id)
@@ -316,16 +343,22 @@ CREATE TABLE IF NOT EXISTS announcements (
   published_at DATETIME NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  deleted_at DATETIME NULL,
+  deleted_by INT UNSIGNED NULL,
   PRIMARY KEY (id),
-  KEY idx_announcements_public (is_published, published_at)
+  KEY idx_announcements_public (is_published, published_at),
+  KEY idx_announcements_deleted_at (deleted_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS newsletter_subscribers (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   email VARCHAR(160) NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted_at DATETIME NULL,
+  deleted_by INT UNSIGNED NULL,
   PRIMARY KEY (id),
-  UNIQUE KEY uq_newsletter_email (email)
+  UNIQUE KEY uq_newsletter_email (email),
+  KEY idx_newsletter_deleted_at (deleted_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS site_content (

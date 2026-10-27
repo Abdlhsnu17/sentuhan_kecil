@@ -6,7 +6,7 @@ async function listAvailableCoupons(_req, res, next) {
       `SELECT code, discount_type AS discountType, discount_value AS discountValue,
               minimum_order AS minimumOrder, ends_at AS endsAt
          FROM coupons
-        WHERE is_active = 1
+        WHERE is_active = 1 AND deleted_at IS NULL
           AND (starts_at IS NULL OR starts_at <= NOW())
           AND (ends_at IS NULL OR ends_at >= NOW())
           AND (usage_limit IS NULL OR used_count < usage_limit)

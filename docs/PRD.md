@@ -402,6 +402,8 @@ Prinsip data:
 - lookup utama memiliki indeks;
 - histori transaksi memakai snapshot;
 - secret token disimpan sebagai hash.
+- data bisnis utama memakai soft delete (`deleted_at`, `deleted_by`) agar histori tidak hilang;
+- cart, favorite, like, dan reset token tetap boleh dihapus permanen karena bersifat sementara.
 
 ## 12. API dan trust boundary
 
@@ -517,7 +519,7 @@ Event tidak boleh membawa data kesehatan anak, alamat lengkap, token, atau crede
 Rilis production diterima bila:
 
 1. Dependency terinstal pada Node.js yang didukung.
-2. `db/schema.sql` dapat diimpor pada database kosong.
+2. `database/schema.sql` dapat diimpor pada database kosong.
 3. Admin awal dapat dibuat.
 4. Guest checkout berhasil dari cart hingga order.
 5. Sistem mencegah overlap terapis.
@@ -548,7 +550,7 @@ Rilis production diterima bila:
 
 ### Fase 1 — Hardening
 
-- selaraskan migration baseline dengan `db/schema.sql`;
+- selaraskan migration baseline dengan `database/schema.sql`;
 - CI untuk lint, test, dan validasi schema;
 - structured logging dan error monitoring;
 - scheduled job untuk expiry order;

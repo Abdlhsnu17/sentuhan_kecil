@@ -12,7 +12,7 @@ async function listProducts(req, res, next) {
   try {
     const { category, q, sort } = req.query;
     const likeOwner = owner(req);
-    const where = ["p.is_active = 1"];
+    const where = ["p.is_active = 1", "p.deleted_at IS NULL", "c.deleted_at IS NULL"];
     const params = [];
 
     if (category && category !== "Semua") {
@@ -51,7 +51,7 @@ async function toggleServiceLike(req, res, next) {
       return res.status(400).json({ message: "Layanan tidak valid." });
     }
 
-    const [products] = await pool.query("SELECT id FROM products WHERE id = ? AND is_active = 1", [productId]);
+    const [products] = await pool.query("SELECT id FROM products WHERE id = ? AND is_active = 1 AND deleted_at IS NULL", [productId]);
     if (!products.length) return res.status(404).json({ message: "Layanan tidak ditemukan." });
 
     const likeOwner = owner(req);
@@ -87,7 +87,7 @@ async function getProduct(req, res, next) {
               p.review_count AS reviews, p.stock, p.badge, p.image
          FROM products p
          JOIN categories c ON c.id = p.category_id
-        WHERE p.id = ? AND p.is_active = 1`,
+        WHERE p.id = ? AND p.is_active = 1 AND p.deleted_at IS NULL AND c.deleted_at IS NULL`,
       [req.params.id]
     );
     if (!rows.length) return res.status(404).json({ message: "Produk tidak ditemukan." });
@@ -102,7 +102,8 @@ async function listCategories(_req, res, next) {
     const [rows] = await pool.query(
       `SELECT c.id, c.name, c.slug, COUNT(p.id) AS productCount
          FROM categories c
-         LEFT JOIN products p ON p.category_id = c.id AND p.is_active = 1
+         LEFT JOIN products p ON p.category_id = c.id AND p.is_active = 1 AND p.deleted_at IS NULL
+        WHERE c.deleted_at IS NULL
         GROUP BY c.id, c.name, c.slug
         ORDER BY c.id`
     );

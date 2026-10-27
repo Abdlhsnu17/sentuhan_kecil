@@ -66,7 +66,7 @@ async function login(req, res, next) {
     const email = (req.body.email || "").trim().toLowerCase();
     const password = req.body.password || "";
 
-    const [rows] = await pool.query("SELECT * FROM users WHERE email = ?", [email]);
+    const [rows] = await pool.query("SELECT * FROM users WHERE email = ? AND deleted_at IS NULL", [email]);
     if (!rows.length) return res.status(401).json({ message: "Email atau password salah." });
 
     const userRow = rows[0];
@@ -88,7 +88,7 @@ async function changePassword(req, res, next) {
     if (typeof newPassword !== "string" || newPassword.length < 12) {
       return res.status(400).json({ message: "Password baru minimal 12 karakter." });
     }
-    const [rows] = await pool.query("SELECT password_hash FROM users WHERE id = ?", [req.user.id]);
+    const [rows] = await pool.query("SELECT password_hash FROM users WHERE id = ? AND deleted_at IS NULL", [req.user.id]);
     if (!rows.length || !await bcrypt.compare(currentPassword || "", rows[0].password_hash)) {
       return res.status(400).json({ message: "Password saat ini tidak cocok." });
     }
@@ -106,7 +106,7 @@ async function requestPasswordReset(req, res, next) {
   try {
     const email = (req.body.email || "").trim().toLowerCase();
     if (!email) return res.status(400).json({ message: "Email wajib diisi." });
-    const [rows] = await pool.query("SELECT id, email FROM users WHERE email = ?", [email]);
+    const [rows] = await pool.query("SELECT id, email FROM users WHERE email = ? AND deleted_at IS NULL", [email]);
     if (!rows.length) return res.json({ message: resetMessage });
 
     const token = crypto.randomBytes(32).toString("hex");
@@ -139,7 +139,11 @@ async function resetPassword(req, res, next) {
       await connection.rollback();
       return res.status(400).json({ message: "Tautan reset tidak valid atau sudah kedaluwarsa." });
     }
-    await connection.query("UPDATE users SET password_hash = ?, session_version = session_version + 1 WHERE id = ?", [await bcrypt.hash(newPassword, 12), tokens[0].user_id]);
+    const [updated] = await connection.query("UPDATE users SET password_hash = ?, session_version = session_version + 1 WHERE id = ? AND deleted_at IS NULL", [await bcrypt.hash(newPassword, 12), tokens[0].user_id]);
+    if (!updated.affectedRows) {
+      await connection.rollback();
+      return res.status(400).json({ message: "Tautan reset tidak valid atau akun sudah tidak aktif." });
+    }
     await connection.query("DELETE FROM password_reset_tokens WHERE user_id = ?", [tokens[0].user_id]);
     await connection.commit();
     res.json({ message: "Password berhasil diatur ulang. Silakan masuk." });
@@ -151,7 +155,7 @@ async function resetPassword(req, res, next) {
 
 async function me(req, res, next) {
   try {
-    const [rows] = await pool.query("SELECT id, name, email, phone, role FROM users WHERE id = ?", [req.user.id]);
+    const [rows] = await pool.query("SELECT id, name, email, phone, role FROM users WHERE id = ? AND deleted_at IS NULL", [req.user.id]);
     if (!rows.length) return res.status(404).json({ message: "Akun tidak ditemukan." });
     res.json(rows[0]);
   } catch (error) {

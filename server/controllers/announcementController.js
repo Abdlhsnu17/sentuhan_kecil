@@ -20,7 +20,7 @@ async function listPublished(_req, res, next) {
     const [rows] = await pool.query(
       `SELECT id, kind, title, excerpt, content, image, published_at AS publishedAt
          FROM announcements
-        WHERE is_published = 1
+        WHERE is_published = 1 AND deleted_at IS NULL
         ORDER BY COALESCE(published_at, created_at) DESC, id DESC
         LIMIT 12`
     );
@@ -36,6 +36,7 @@ async function listAll(_req, res, next) {
       `SELECT id, kind, title, excerpt, content, image,
               is_published AS isPublished, published_at AS publishedAt, created_at AS createdAt
          FROM announcements
+        WHERE deleted_at IS NULL
         ORDER BY created_at DESC, id DESC`
     );
     res.json(rows);
@@ -70,12 +71,12 @@ async function update(req, res, next) {
       `UPDATE announcements
           SET kind = ?, title = ?, excerpt = ?, content = ?, image = ?, is_published = ?,
               published_at = IF(?, COALESCE(published_at, CURRENT_TIMESTAMP), NULL)
-        WHERE id = ?`,
+        WHERE id = ? AND deleted_at IS NULL`,
       [payload.kind, payload.title, payload.excerpt, payload.content, payload.image,
         payload.isPublished ? 1 : 0, payload.isPublished ? 1 : 0, req.params.id]
     );
     if (!result.affectedRows) {
-      const [rows] = await pool.query("SELECT id FROM announcements WHERE id = ?", [req.params.id]);
+      const [rows] = await pool.query("SELECT id FROM announcements WHERE id = ? AND deleted_at IS NULL", [req.params.id]);
       if (!rows.length) return res.status(404).json({ message: "Berita/pengumuman tidak ditemukan." });
     }
     res.json({ id: Number(req.params.id), message: "Berita/pengumuman diperbarui." });
@@ -86,7 +87,10 @@ async function update(req, res, next) {
 
 async function remove(req, res, next) {
   try {
-    const [result] = await pool.query("DELETE FROM announcements WHERE id = ?", [req.params.id]);
+    const [result] = await pool.query(
+      "UPDATE announcements SET deleted_at = NOW(), deleted_by = ?, is_published = 0 WHERE id = ? AND deleted_at IS NULL",
+      [req.user.id, req.params.id]
+    );
     if (!result.affectedRows) return res.status(404).json({ message: "Berita/pengumuman tidak ditemukan." });
     res.json({ id: Number(req.params.id), message: "Berita/pengumuman dihapus." });
   } catch (error) {

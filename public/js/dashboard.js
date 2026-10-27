@@ -205,7 +205,7 @@ function renderOrders(orders) {
       <td>${proof}</td>
       <td><div class="order-status-stack"><label>Pesanan<select data-order-id="${Number(order.id)}" aria-label="Status pesanan ${dashboardEsc(order.orderCode)}"${finalAttributes}>${orderOptions}</select></label><label>Sesi<select data-appointment-order="${Number(order.id)}" aria-label="Status sesi ${dashboardEsc(order.orderCode)}"${finalAttributes}>${appointmentOptions}</select></label><label>Pembayaran<select data-payment-order="${Number(order.id)}" aria-label="Status pembayaran ${dashboardEsc(order.orderCode)}"${finalAttributes}>${paymentOptions}</select></label></div></td>
       <td>${isFinal
-        ? `<button class="icon-button icon-button--danger" type="button" data-delete-order="${Number(order.id)}" aria-label="Hapus pesanan ${dashboardEsc(order.orderCode)}" title="Hapus pesanan">×</button>`
+        ? `<button class="icon-button icon-button--danger" type="button" data-delete-order="${Number(order.id)}" aria-label="Arsipkan pesanan ${dashboardEsc(order.orderCode)}" title="Arsipkan pesanan">×</button>`
         : `<button class="icon-button icon-button--danger" type="button" data-cancel-order="${Number(order.id)}" aria-label="Batalkan pesanan ${dashboardEsc(order.orderCode)}" title="Batalkan pesanan">×</button>`}</td>
     </tr>`;
   }).join("");
@@ -617,7 +617,7 @@ document.querySelector("#orders-table").addEventListener("click", async event =>
   const button = cancelButton || deleteButton;
   if (!button) return;
   const confirmation = deleteButton
-    ? "Hapus permanen pesanan final ini? Tindakan ini tidak dapat dikembalikan."
+    ? "Arsipkan pesanan final ini? Pesanan akan disembunyikan tanpa menghapus riwayatnya."
     : "Batalkan pesanan ini dan kembalikan stok?";
   if (!window.confirm(confirmation)) return;
   button.disabled = true;
@@ -960,9 +960,9 @@ document.querySelector("#users-table").addEventListener("click", async event => 
     const relatedDataWarning = Number(user.totalOrders) > 0
       ? `\n\n${Number(user.totalOrders)} pesanan dan seluruh data akun yang terkait juga akan dihapus.`
       : "";
-    if (!window.confirm(`Hapus akun ${user.name}?${relatedDataWarning}\n\nTindakan ini tidak dapat dibatalkan.`)) return;
+    if (!window.confirm(`Arsipkan akun ${user.name}?${relatedDataWarning}\n\nAkun tidak dapat login setelah diarsipkan.`)) return;
     deleteButton.disabled = true;
-    setUsersMessage(`Menghapus akun ${user.name}…`);
+    setUsersMessage(`Mengarsipkan akun ${user.name}…`);
     try {
       await api.admin.deleteUser(user.id);
       renderUsers(await api.admin.users());
@@ -1065,7 +1065,7 @@ document.querySelector("#services-table").addEventListener("click", async event 
   const product = dashboardProducts.find(item => item.id === productId);
   if (edit && product) return openServiceEditor(product);
   if (!remove || !product) return;
-  if (!window.confirm(`Hapus layanan ${product.name}? Riwayat pesanan yang sudah ada tetap tersimpan.`)) return;
+  if (!window.confirm(`Arsipkan layanan ${product.name}? Riwayat pesanan tetap tersimpan.`)) return;
   const button = remove;
   button.disabled = true;
   try {

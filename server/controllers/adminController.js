@@ -27,7 +27,7 @@ async function rejectFinalOrderChange(orderId, res) {
   const [orders] = await pool.query(
     `SELECT status, appointment_status AS appointmentStatus,
             payment_status AS paymentStatus
-       FROM orders WHERE id = ?`,
+       FROM orders WHERE id = ? AND deleted_at IS NULL`,
     [orderId]
   );
   if (!orders.length) {
@@ -53,7 +53,7 @@ function slugify(text) {
 
 async function listCategoriesAdmin(_req, res, next) {
   try {
-    const [rows] = await pool.query(`SELECT c.id, c.name, c.slug, c.created_at AS createdAt, COUNT(p.id) AS productCount FROM categories c LEFT JOIN products p ON p.category_id = c.id GROUP BY c.id, c.name, c.slug, c.created_at ORDER BY c.name`);
+    const [rows] = await pool.query(`SELECT c.id, c.name, c.slug, c.created_at AS createdAt, COUNT(p.id) AS productCount FROM categories c LEFT JOIN products p ON p.category_id = c.id AND p.deleted_at IS NULL WHERE c.deleted_at IS NULL GROUP BY c.id, c.name, c.slug, c.created_at ORDER BY c.name`);
     res.json(rows);
   } catch (error) { next(error); }
 }
@@ -73,7 +73,7 @@ async function updateCategory(req, res, next) {
     const name = String(req.body.name || "").trim();
     const slug = slugify(req.body.slug || name);
     if (!name || !slug) return res.status(400).json({ message: "Nama kategori wajib diisi." });
-    const [result] = await pool.query("UPDATE categories SET name = ?, slug = ? WHERE id = ?", [name, slug, req.params.id]);
+    const [result] = await pool.query("UPDATE categories SET name = ?, slug = ? WHERE id = ? AND deleted_at IS NULL", [name, slug, req.params.id]);
     if (!result.affectedRows) return res.status(404).json({ message: "Kategori tidak ditemukan." });
     res.json({ id: Number(req.params.id), message: `Kategori ${name} diperbarui.` });
   } catch (error) { if (error.code === "ER_DUP_ENTRY") return res.status(409).json({ message: "Nama atau slug kategori sudah digunakan." }); next(error); }
@@ -81,11 +81,11 @@ async function updateCategory(req, res, next) {
 
 async function deleteCategory(req, res, next) {
   try {
-    const [rows] = await pool.query("SELECT name FROM categories WHERE id = ?", [req.params.id]);
+    const [rows] = await pool.query("SELECT name FROM categories WHERE id = ? AND deleted_at IS NULL", [req.params.id]);
     if (!rows.length) return res.status(404).json({ message: "Kategori tidak ditemukan." });
-    const [[{ count }]] = await pool.query("SELECT COUNT(*) AS count FROM products WHERE category_id = ?", [req.params.id]);
+    const [[{ count }]] = await pool.query("SELECT COUNT(*) AS count FROM products WHERE category_id = ? AND deleted_at IS NULL", [req.params.id]);
     if (Number(count)) return res.status(409).json({ message: "Kategori yang masih dipakai layanan tidak dapat dihapus." });
-    await pool.query("DELETE FROM categories WHERE id = ?", [req.params.id]);
+    await pool.query("UPDATE categories SET deleted_at = NOW(), deleted_by = ? WHERE id = ? AND deleted_at IS NULL", [req.user.id, req.params.id]);
     res.json({ id: Number(req.params.id), message: `Kategori ${rows[0].name} dihapus.` });
   } catch (error) { next(error); }
 }
@@ -102,22 +102,22 @@ async function getStats(_req, res, next) {
   try {
     const [[totals]] = await pool.query(
       `SELECT
-         (SELECT COUNT(*) FROM users)                                    AS totalUsers,
-         (SELECT COUNT(*) FROM users WHERE role = 'admin')               AS totalAdmins,
-         (SELECT COUNT(*) FROM products)                                 AS totalProducts,
-         (SELECT COUNT(*) FROM products WHERE is_active = 0)             AS inactiveProducts,
-         (SELECT COUNT(*) FROM products WHERE stock <= 10)               AS lowStock,
-         (SELECT COUNT(*) FROM orders)                                   AS totalOrders,
-         (SELECT COUNT(*) FROM orders WHERE status IN ('Menunggu pembayaran','Menunggu konfirmasi')) AS pendingOrders,
-         (SELECT COUNT(*) FROM orders WHERE payment_status IN ('Menunggu pembayaran','Menunggu verifikasi')) AS pendingPayments,
+         (SELECT COUNT(*) FROM users WHERE deleted_at IS NULL)                                    AS totalUsers,
+         (SELECT COUNT(*) FROM users WHERE role = 'admin' AND deleted_at IS NULL)                  AS totalAdmins,
+         (SELECT COUNT(*) FROM products WHERE deleted_at IS NULL)                                 AS totalProducts,
+         (SELECT COUNT(*) FROM products WHERE is_active = 0 AND deleted_at IS NULL)                AS inactiveProducts,
+         (SELECT COUNT(*) FROM products WHERE stock <= 10 AND deleted_at IS NULL)                  AS lowStock,
+         (SELECT COUNT(*) FROM orders WHERE deleted_at IS NULL)                                   AS totalOrders,
+         (SELECT COUNT(*) FROM orders WHERE status IN ('Menunggu pembayaran','Menunggu konfirmasi') AND deleted_at IS NULL) AS pendingOrders,
+         (SELECT COUNT(*) FROM orders WHERE payment_status IN ('Menunggu pembayaran','Menunggu verifikasi') AND deleted_at IS NULL) AS pendingPayments,
          (SELECT COALESCE(SUM(total), 0) FROM orders
-           WHERE status <> 'Dibatalkan' AND payment_status = 'Dibayar')  AS revenue,
-         (SELECT COUNT(*) FROM newsletter_subscribers)                   AS subscribers`
+           WHERE status <> 'Dibatalkan' AND payment_status = 'Dibayar' AND deleted_at IS NULL)  AS revenue,
+         (SELECT COUNT(*) FROM newsletter_subscribers WHERE deleted_at IS NULL)               AS subscribers`
     );
 
     const [byStatus] = await pool.query(
       `SELECT status, COUNT(*) AS jumlah, COALESCE(SUM(total), 0) AS nilai
-         FROM orders GROUP BY status`
+         FROM orders WHERE deleted_at IS NULL GROUP BY status`
     );
 
     const [topProducts] = await pool.query(
@@ -128,6 +128,7 @@ async function getStats(_req, res, next) {
          JOIN orders o ON o.id = oi.order_id
                       AND o.status <> 'Dibatalkan'
                       AND o.payment_status = 'Dibayar'
+                      AND o.deleted_at IS NULL
         GROUP BY oi.product_name
         ORDER BY terjual DESC
         LIMIT 5`
@@ -143,7 +144,7 @@ async function getStats(_req, res, next) {
 
 async function listAllOrders(req, res, next) {
   try {
-    const where = [];
+    const where = ["o.deleted_at IS NULL"];
     const params = [];
 
     if (req.query.status && ORDER_STATUSES.includes(req.query.status)) {
@@ -171,9 +172,9 @@ async function listAllOrders(req, res, next) {
               u.id AS userId, COALESCE(u.name, o.recipient_name) AS customerName,
               COALESCE(u.email, o.recipient_email) AS customerEmail
          FROM orders o
-         LEFT JOIN users u ON u.id = o.user_id
+         LEFT JOIN users u ON u.id = o.user_id AND u.deleted_at IS NULL
          LEFT JOIN therapists t ON t.id = o.therapist_id
-        ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+        WHERE ${where.join(" AND ")}
         ORDER BY o.created_at DESC
         LIMIT 200`,
       params
@@ -204,7 +205,7 @@ async function updateOrderStatus(req, res, next) {
     }
     if (await rejectFinalOrderChange(req.params.id, res)) return;
 
-    const [result] = await pool.query("UPDATE orders SET status = ? WHERE id = ?", [status, req.params.id]);
+    const [result] = await pool.query("UPDATE orders SET status = ? WHERE id = ? AND deleted_at IS NULL", [status, req.params.id]);
     if (!result.affectedRows) return res.status(404).json({ message: "Pesanan tidak ditemukan." });
     const [orders] = await pool.query("SELECT order_code AS orderCode, recipient_name AS recipientName, recipient_email AS recipientEmail FROM orders WHERE id = ?", [req.params.id]);
     notifyOrderUpdate({ to: orders[0].recipientEmail, recipientName: orders[0].recipientName, orderCode: orders[0].orderCode, subject: `Status booking ${orders[0].orderCode}`, message: `Status pesanan Anda diperbarui menjadi: ${status}.` });
@@ -222,7 +223,7 @@ async function cancelOrder(req, res, next) {
     const [orders] = await connection.query(
       `SELECT id, status, appointment_status AS appointmentStatus,
               payment_status AS paymentStatus, discount_code AS discountCode
-         FROM orders WHERE id = ? FOR UPDATE`,
+         FROM orders WHERE id = ? AND deleted_at IS NULL FOR UPDATE`,
       [req.params.id]
     );
     const order = orders[0];
@@ -257,15 +258,18 @@ async function deleteOrder(req, res, next) {
     const [orders] = await pool.query(
       `SELECT id, status, appointment_status AS appointmentStatus,
               payment_status AS paymentStatus
-         FROM orders WHERE id = ?`,
+         FROM orders WHERE id = ? AND deleted_at IS NULL`,
       [req.params.id]
     );
     if (!orders.length) return res.status(404).json({ message: "Pesanan tidak ditemukan." });
     if (!isFinalOrder(orders[0])) {
       return res.status(409).json({ message: "Hanya pesanan yang sudah selesai atau dibatalkan yang dapat dihapus." });
     }
-    await pool.query("DELETE FROM orders WHERE id = ?", [req.params.id]);
-    res.json({ id: Number(req.params.id), message: "Pesanan berhasil dihapus permanen." });
+    await pool.query(
+      "UPDATE orders SET deleted_at = NOW(), deleted_by = ? WHERE id = ? AND deleted_at IS NULL",
+      [req.user.id, req.params.id]
+    );
+    res.json({ id: Number(req.params.id), message: "Pesanan berhasil diarsipkan." });
   } catch (error) {
     next(error);
   }
@@ -285,7 +289,7 @@ async function updatePaymentStatus(req, res, next) {
                 WHEN ? = 'Dibayar' AND status = 'Menunggu pembayaran' AND appointment_status = 'Dikonfirmasi' THEN 'Terkonfirmasi'
                 WHEN ? = 'Dibayar' AND status = 'Menunggu pembayaran' THEN 'Menunggu konfirmasi'
                 ELSE status END
-        WHERE id = ?`, [status, status, status, status, req.params.id]
+        WHERE id = ? AND deleted_at IS NULL`, [status, status, status, status, req.params.id]
     );
     if (!result.affectedRows) return res.status(404).json({ message: "Pesanan tidak ditemukan." });
     await completeOrderWhenReady(req.params.id);
@@ -304,7 +308,7 @@ async function updateAppointmentStatus(req, res, next) {
       return res.status(400).json({ message: "Status jadwal tidak dikenali." });
     }
     if (await rejectFinalOrderChange(req.params.id, res)) return;
-    const [result] = await pool.query("UPDATE orders SET appointment_status = ? WHERE id = ?", [status, req.params.id]);
+    const [result] = await pool.query("UPDATE orders SET appointment_status = ? WHERE id = ? AND deleted_at IS NULL", [status, req.params.id]);
     if (!result.affectedRows) return res.status(404).json({ message: "Pesanan tidak ditemukan." });
     if (status === "Dikonfirmasi") {
       await pool.query("UPDATE orders SET status = 'Terkonfirmasi' WHERE id = ? AND payment_status = 'Dibayar' AND status <> 'Dibatalkan'", [req.params.id]);
@@ -331,7 +335,8 @@ async function completeOrderWhenReady(orderId) {
       WHERE id = ?
         AND payment_status = 'Dibayar'
         AND appointment_status = 'Selesai'
-        AND status <> 'Dibatalkan'`,
+        AND status <> 'Dibatalkan'
+        AND deleted_at IS NULL`,
     [orderId]
   );
 }
@@ -354,7 +359,7 @@ async function listOrderChangeRequests(req, res, next) {
               COALESCE(u.name, o.recipient_name) AS customerName,
               COALESCE(u.email, o.recipient_email) AS customerEmail
          FROM order_change_requests r
-         JOIN orders o ON o.id = r.order_id
+         JOIN orders o ON o.id = r.order_id AND o.deleted_at IS NULL
          LEFT JOIN users u ON u.id = r.user_id
         ${status ? "WHERE r.status = ?" : ""}
         ORDER BY (r.status = 'Menunggu') DESC, r.created_at DESC
@@ -391,7 +396,7 @@ async function reviewOrderChangeRequest(req, res, next) {
               , o.service_duration_minutes AS durationMinutes, o.therapist_id AS therapistId,
               o.order_code AS orderCode, o.recipient_name AS recipientName, o.recipient_email AS recipientEmail
          FROM order_change_requests r
-         JOIN orders o ON o.id = r.order_id
+         JOIN orders o ON o.id = r.order_id AND o.deleted_at IS NULL
         WHERE r.id = ? FOR UPDATE`,
       [req.params.id]
     );
@@ -423,7 +428,7 @@ async function reviewOrderChangeRequest(req, res, next) {
         return res.status(400).json({ message: "Jadwal yang diminta sudah lewat atau tidak valid." });
       }
       const settings = await getBookingSettings(connection);
-      const [therapists] = await connection.query("SELECT id, name FROM therapists WHERE is_active = 1 ORDER BY id FOR UPDATE");
+      const [therapists] = await connection.query("SELECT id, name FROM therapists WHERE is_active = 1 AND deleted_at IS NULL ORDER BY id FOR UPDATE");
       if (!therapists.length) {
         await connection.rollback();
         return res.status(409).json({ message: "Belum ada terapis aktif untuk menerima jadwal baru." });
@@ -431,7 +436,7 @@ async function reviewOrderChangeRequest(req, res, next) {
       const [occupied] = await connection.query(
         `SELECT id, therapist_id AS therapistId, TIME_FORMAT(appointment_time, '%H:%i') AS time,
                 service_duration_minutes AS durationMinutes FROM orders
-          WHERE id <> ? AND appointment_date = ?
+          WHERE id <> ? AND deleted_at IS NULL AND appointment_date = ?
             AND status <> 'Dibatalkan' AND appointment_status <> 'Dibatalkan'
           FOR UPDATE`,
         [request.orderId, request.requestedDate]
@@ -498,7 +503,8 @@ async function listTherapists(_req, res, next) {
     const [rows] = await pool.query(
       `SELECT t.id, t.name, t.phone, t.is_active AS isActive, t.created_at AS createdAt,
               COUNT(o.id) AS totalBookings
-         FROM therapists t LEFT JOIN orders o ON o.therapist_id = t.id
+         FROM therapists t LEFT JOIN orders o ON o.therapist_id = t.id AND o.deleted_at IS NULL
+        WHERE t.deleted_at IS NULL
         GROUP BY t.id, t.name, t.phone, t.is_active, t.created_at
         ORDER BY t.is_active DESC, t.name`
     );
@@ -522,11 +528,11 @@ async function updateTherapist(req, res, next) {
     const phone = String(req.body.phone || "").trim() || null;
     if (!name || name.length > 120) return res.status(400).json({ message: "Nama terapis wajib diisi (maksimal 120 karakter)." });
     if (req.body.isActive === false) {
-      const [[{ activeCount }]] = await pool.query("SELECT COUNT(*) AS activeCount FROM therapists WHERE is_active = 1");
-      const [target] = await pool.query("SELECT is_active AS isActive FROM therapists WHERE id = ?", [req.params.id]);
+      const [[{ activeCount }]] = await pool.query("SELECT COUNT(*) AS activeCount FROM therapists WHERE is_active = 1 AND deleted_at IS NULL");
+      const [target] = await pool.query("SELECT is_active AS isActive FROM therapists WHERE id = ? AND deleted_at IS NULL", [req.params.id]);
       if (target[0]?.isActive && Number(activeCount) <= 1) return res.status(400).json({ message: "Minimal harus ada satu terapis aktif." });
     }
-    const [result] = await pool.query("UPDATE therapists SET name = ?, phone = ?, is_active = ? WHERE id = ?", [name, phone, req.body.isActive === false ? 0 : 1, req.params.id]);
+    const [result] = await pool.query("UPDATE therapists SET name = ?, phone = ?, is_active = ? WHERE id = ? AND deleted_at IS NULL", [name, phone, req.body.isActive === false ? 0 : 1, req.params.id]);
     if (!result.affectedRows) return res.status(404).json({ message: "Terapis tidak ditemukan." });
     res.json({ id: Number(req.params.id), message: `Data terapis ${name} diperbarui.` });
   } catch (error) { next(error); }
@@ -534,11 +540,11 @@ async function updateTherapist(req, res, next) {
 
 async function deleteTherapist(req, res, next) {
   try {
-    const [rows] = await pool.query("SELECT name FROM therapists WHERE id = ?", [req.params.id]);
+    const [rows] = await pool.query("SELECT name FROM therapists WHERE id = ? AND deleted_at IS NULL", [req.params.id]);
     if (!rows.length) return res.status(404).json({ message: "Terapis tidak ditemukan." });
     const [[{ total }]] = await pool.query("SELECT COUNT(*) AS total FROM orders WHERE therapist_id = ?", [req.params.id]);
     if (Number(total)) return res.status(409).json({ message: "Terapis yang sudah memiliki booking tidak dapat dihapus. Nonaktifkan saja." });
-    await pool.query("DELETE FROM therapists WHERE id = ?", [req.params.id]);
+    await pool.query("UPDATE therapists SET deleted_at = NOW(), deleted_by = ?, is_active = 0 WHERE id = ? AND deleted_at IS NULL", [req.user.id, req.params.id]);
     res.json({ id: Number(req.params.id), message: `Terapis ${rows[0].name} dihapus.` });
   } catch (error) { next(error); }
 }
@@ -553,7 +559,8 @@ async function listAllProducts(_req, res, next) {
               p.review_count AS reviews, p.stock, p.badge, p.image,
               p.is_active AS isActive, p.created_at AS createdAt
          FROM products p
-         JOIN categories c ON c.id = p.category_id
+         JOIN categories c ON c.id = p.category_id AND c.deleted_at IS NULL
+        WHERE p.deleted_at IS NULL
         ORDER BY p.id DESC`
     );
     res.json(rows);
@@ -574,7 +581,7 @@ async function createProduct(req, res, next) {
       return res.status(400).json({ message: "Nama, kategori, durasi 30/45/60 menit, dan harga layanan wajib diisi." });
     }
 
-    const [category] = await pool.query("SELECT id FROM categories WHERE id = ?", [categoryId]);
+    const [category] = await pool.query("SELECT id FROM categories WHERE id = ? AND deleted_at IS NULL", [categoryId]);
     if (!category.length) return res.status(400).json({ message: "Kategori tidak ditemukan." });
 
     const slug = slugify(req.body.slug || name);
@@ -624,7 +631,7 @@ async function updateProduct(req, res, next) {
     if (!fields.length) return res.status(400).json({ message: "Tidak ada data yang diubah." });
 
     const [result] = await pool.query(
-      `UPDATE products SET ${fields.join(", ")} WHERE id = ?`,
+      `UPDATE products SET ${fields.join(", ")} WHERE id = ? AND deleted_at IS NULL`,
       [...params, req.params.id]
     );
     if (!result.affectedRows) return res.status(404).json({ message: "Produk tidak ditemukan." });
@@ -636,12 +643,15 @@ async function updateProduct(req, res, next) {
 }
 
 /**
- * Hapus layanan dari katalog. Riwayat pesanan tetap aman: order_items
- * menyimpan snapshot nama/harga dan foreign key product_id memakai SET NULL.
+ * Arsipkan layanan dari katalog. Riwayat pesanan tetap aman dan data layanan
+ * dapat dipulihkan langsung dari database bila diperlukan.
  */
 async function deleteProduct(req, res, next) {
   try {
-    const [result] = await pool.query("DELETE FROM products WHERE id = ?", [req.params.id]);
+    const [result] = await pool.query(
+      "UPDATE products SET deleted_at = NOW(), deleted_by = ?, is_active = 0 WHERE id = ? AND deleted_at IS NULL",
+      [req.user.id, req.params.id]
+    );
     if (!result.affectedRows) return res.status(404).json({ message: "Produk tidak ditemukan." });
     res.json({ id: Number(req.params.id), message: "Produk berhasil dihapus." });
   } catch (error) {
@@ -657,6 +667,7 @@ async function listUsers(_req, res, next) {
       `SELECT u.id, u.name, u.email, u.phone, u.role, u.created_at AS createdAt,
               (SELECT COUNT(*) FROM orders o WHERE o.user_id = u.id) AS totalOrders
          FROM users u
+        WHERE u.deleted_at IS NULL
         ORDER BY u.created_at DESC`
     );
     res.json(rows);
@@ -706,7 +717,7 @@ async function updateUser(req, res, next) {
     if (existing.length) return res.status(409).json({ message: "Email sudah digunakan akun lain." });
 
     const [result] = await pool.query(
-      "UPDATE users SET name = ?, email = ?, phone = ? WHERE id = ?",
+      "UPDATE users SET name = ?, email = ?, phone = ? WHERE id = ? AND deleted_at IS NULL",
       [name, email, phone, targetId]
     );
     if (!result.affectedRows) return res.status(404).json({ message: "Akun tidak ditemukan." });
@@ -733,14 +744,14 @@ async function updateUserRole(req, res, next) {
 
     // Selalu sisakan minimal satu admin di sistem.
     if (role !== "admin") {
-      const [[{ jumlah }]] = await pool.query("SELECT COUNT(*) AS jumlah FROM users WHERE role = 'admin'");
-      const [target] = await pool.query("SELECT role FROM users WHERE id = ?", [targetId]);
+      const [[{ jumlah }]] = await pool.query("SELECT COUNT(*) AS jumlah FROM users WHERE role = 'admin' AND deleted_at IS NULL");
+      const [target] = await pool.query("SELECT role FROM users WHERE id = ? AND deleted_at IS NULL", [targetId]);
       if (target[0]?.role === "admin" && jumlah <= 1) {
         return res.status(400).json({ message: "Minimal harus ada satu admin." });
       }
     }
 
-    const [result] = await pool.query("UPDATE users SET role = ? WHERE id = ?", [role, targetId]);
+    const [result] = await pool.query("UPDATE users SET role = ? WHERE id = ? AND deleted_at IS NULL", [role, targetId]);
     if (!result.affectedRows) return res.status(404).json({ message: "Akun tidak ditemukan." });
 
     res.json({ id: targetId, role, message: `Peran akun diubah menjadi ${role}.` });
@@ -762,7 +773,7 @@ async function updateUserPassword(req, res, next) {
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
-    const [result] = await pool.query("UPDATE users SET password_hash = ?, session_version = session_version + 1 WHERE id = ?", [passwordHash, targetId]);
+    const [result] = await pool.query("UPDATE users SET password_hash = ?, session_version = session_version + 1 WHERE id = ? AND deleted_at IS NULL", [passwordHash, targetId]);
     if (!result.affectedRows) return res.status(404).json({ message: "Akun tidak ditemukan." });
 
     res.json({ id: targetId, message: "Password akun berhasil diperbarui." });
@@ -783,19 +794,22 @@ async function deleteUser(req, res, next) {
 
     const [targets] = await pool.query(
       `SELECT u.role, COUNT(o.id) AS totalOrders
-         FROM users u LEFT JOIN orders o ON o.user_id = u.id
-        WHERE u.id = ? GROUP BY u.id, u.role`,
+         FROM users u LEFT JOIN orders o ON o.user_id = u.id AND o.deleted_at IS NULL
+        WHERE u.id = ? AND u.deleted_at IS NULL GROUP BY u.id, u.role`,
       [targetId]
     );
     if (!targets.length) return res.status(404).json({ message: "Akun tidak ditemukan." });
     if (targets[0].role === "admin") {
-      const [[{ jumlah }]] = await pool.query("SELECT COUNT(*) AS jumlah FROM users WHERE role = 'admin'");
+      const [[{ jumlah }]] = await pool.query("SELECT COUNT(*) AS jumlah FROM users WHERE role = 'admin' AND deleted_at IS NULL");
       if (jumlah <= 1) return res.status(400).json({ message: "Minimal harus ada satu admin." });
     }
 
-    const [result] = await pool.query("DELETE FROM users WHERE id = ?", [targetId]);
+    const [result] = await pool.query(
+      "UPDATE users SET deleted_at = NOW(), deleted_by = ?, session_version = session_version + 1 WHERE id = ? AND deleted_at IS NULL",
+      [req.user.id, targetId]
+    );
     if (!result.affectedRows) return res.status(404).json({ message: "Akun tidak ditemukan." });
-    res.json({ id: targetId, message: "Akun dan data terkait berhasil dihapus." });
+    res.json({ id: targetId, message: "Akun berhasil diarsipkan dan seluruh sesinya dinonaktifkan." });
   } catch (error) {
     next(error);
   }
@@ -807,6 +821,7 @@ async function listReviews(_req, res, next) {
       `SELECT r.id, r.order_id AS orderId, r.rating, r.comment, r.is_published AS isPublished, r.created_at AS createdAt,
               u.name AS customerName, o.order_code AS orderCode
          FROM service_reviews r JOIN users u ON u.id = r.user_id JOIN orders o ON o.id = r.order_id
+        WHERE r.deleted_at IS NULL
         ORDER BY r.created_at DESC`
     );
     res.json(rows);
@@ -816,7 +831,7 @@ async function listReviews(_req, res, next) {
 async function moderateReview(req, res, next) {
   try {
     const isPublished = Boolean(req.body.isPublished);
-    const [result] = await pool.query("UPDATE service_reviews SET is_published = ? WHERE id = ?", [isPublished, req.params.id]);
+    const [result] = await pool.query("UPDATE service_reviews SET is_published = ? WHERE id = ? AND deleted_at IS NULL", [isPublished, req.params.id]);
     if (!result.affectedRows) return res.status(404).json({ message: "Ulasan tidak ditemukan." });
     res.json({ id: Number(req.params.id), isPublished, message: isPublished ? "Ulasan diterbitkan." : "Ulasan disembunyikan." });
   } catch (error) { next(error); }
@@ -851,7 +866,7 @@ async function listCoupons(_req, res, next) {
       `SELECT id, code, discount_type AS discountType, discount_value AS discountValue,
               minimum_order AS minimumOrder, usage_limit AS usageLimit, used_count AS usedCount,
               starts_at AS startsAt, ends_at AS endsAt, is_active AS isActive
-         FROM coupons ORDER BY is_active DESC, id DESC`
+         FROM coupons WHERE deleted_at IS NULL ORDER BY is_active DESC, id DESC`
     );
     res.json(rows);
   } catch (error) { next(error); }
@@ -876,7 +891,7 @@ async function updateCoupon(req, res, next) {
   try {
     const coupon = couponPayload(req.body);
     if (coupon.errors.length) return res.status(400).json({ message: coupon.errors[0] });
-    const [currentRows] = await pool.query("SELECT code, used_count AS usedCount FROM coupons WHERE id = ?", [req.params.id]);
+    const [currentRows] = await pool.query("SELECT code, used_count AS usedCount FROM coupons WHERE id = ? AND deleted_at IS NULL", [req.params.id]);
     if (!currentRows.length) return res.status(404).json({ message: "Voucher tidak ditemukan." });
     if (Number(currentRows[0].usedCount) > 0 && currentRows[0].code !== coupon.code) {
       return res.status(409).json({ message: "Kode voucher yang pernah dipakai tidak dapat diubah karena terhubung dengan riwayat transaksi." });
@@ -885,7 +900,7 @@ async function updateCoupon(req, res, next) {
     if (existing.length) return res.status(409).json({ message: "Kode voucher sudah digunakan." });
     const [result] = await pool.query(
       `UPDATE coupons SET code = ?, discount_type = ?, discount_value = ?, minimum_order = ?,
-              usage_limit = ?, starts_at = ?, ends_at = ?, is_active = ? WHERE id = ?`,
+              usage_limit = ?, starts_at = ?, ends_at = ?, is_active = ? WHERE id = ? AND deleted_at IS NULL`,
       [coupon.code, coupon.discountType, coupon.discountValue, coupon.minimumOrder, coupon.usageLimit, coupon.startsAt, coupon.endsAt, coupon.isActive ? 1 : 0, req.params.id]
     );
     res.json({ id: Number(req.params.id), message: `Voucher ${coupon.code} berhasil diperbarui.` });
@@ -894,11 +909,10 @@ async function updateCoupon(req, res, next) {
 
 async function deleteCoupon(req, res, next) {
   try {
-    const [rows] = await pool.query("SELECT code, used_count AS usedCount FROM coupons WHERE id = ?", [req.params.id]);
+    const [rows] = await pool.query("SELECT code, used_count AS usedCount FROM coupons WHERE id = ? AND deleted_at IS NULL", [req.params.id]);
     if (!rows.length) return res.status(404).json({ message: "Voucher tidak ditemukan." });
-    if (Number(rows[0].usedCount) > 0) return res.status(409).json({ message: "Voucher yang pernah dipakai tidak dapat dihapus. Nonaktifkan voucher untuk menjaga riwayat transaksi." });
-    await pool.query("DELETE FROM coupons WHERE id = ?", [req.params.id]);
-    res.json({ id: Number(req.params.id), message: `Voucher ${rows[0].code} berhasil dihapus.` });
+    await pool.query("UPDATE coupons SET deleted_at = NOW(), deleted_by = ?, is_active = 0 WHERE id = ? AND deleted_at IS NULL", [req.user.id, req.params.id]);
+    res.json({ id: Number(req.params.id), message: `Voucher ${rows[0].code} berhasil diarsipkan.` });
   } catch (error) { next(error); }
 }
 
@@ -917,7 +931,7 @@ async function listNewsletterSubscribers(req, res, next) {
     const page = Math.max(1, Math.min(10_000, Number.parseInt(req.query.page, 10) || 1));
     const limit = Math.max(1, Math.min(200, Number.parseInt(req.query.limit, 10) || 50));
     const offset = (page - 1) * limit;
-    const where = q ? "WHERE email LIKE ?" : "";
+    const where = q ? "WHERE deleted_at IS NULL AND email LIKE ?" : "WHERE deleted_at IS NULL";
     const params = q ? [`%${q}%`] : [];
     const [[{ total }]] = await pool.query(`SELECT COUNT(*) AS total FROM newsletter_subscribers ${where}`, params);
     const [items] = await pool.query(
@@ -931,7 +945,10 @@ async function listNewsletterSubscribers(req, res, next) {
 
 async function removeNewsletterSubscriber(req, res, next) {
   try {
-    const [result] = await pool.query("DELETE FROM newsletter_subscribers WHERE id = ?", [req.params.id]);
+    const [result] = await pool.query(
+      "UPDATE newsletter_subscribers SET deleted_at = NOW(), deleted_by = ? WHERE id = ? AND deleted_at IS NULL",
+      [req.user.id, req.params.id]
+    );
     if (!result.affectedRows) return res.status(404).json({ message: "Subscriber tidak ditemukan." });
     res.json({ id: Number(req.params.id), message: "Subscriber dihapus dari newsletter." });
   } catch (error) { next(error); }
@@ -956,19 +973,19 @@ async function salesReport(req, res, next) {
               COALESCE(SUM(CASE WHEN payment_status = 'Dibayar' AND status <> 'Dibatalkan' THEN total ELSE 0 END), 0) AS revenue,
               COUNT(CASE WHEN payment_status = 'Dibayar' AND status <> 'Dibatalkan' THEN 1 END) AS paidOrders,
               COUNT(CASE WHEN status = 'Dibatalkan' THEN 1 END) AS cancelledOrders
-         FROM orders WHERE DATE(created_at) BETWEEN ? AND ?`, params
+         FROM orders WHERE deleted_at IS NULL AND DATE(created_at) BETWEEN ? AND ?`, params
     );
     const [byDay] = await pool.query(
       `SELECT DATE_FORMAT(created_at, '%Y-%m-%d') AS date,
               COUNT(*) AS orders,
               COALESCE(SUM(CASE WHEN payment_status = 'Dibayar' AND status <> 'Dibatalkan' THEN total ELSE 0 END), 0) AS revenue
-         FROM orders WHERE DATE(created_at) BETWEEN ? AND ?
+         FROM orders WHERE deleted_at IS NULL AND DATE(created_at) BETWEEN ? AND ?
          GROUP BY DATE(created_at) ORDER BY date`, params
     );
     const [byPaymentMethod] = await pool.query(
       `SELECT payment_method AS paymentMethod, COUNT(*) AS orders,
               COALESCE(SUM(CASE WHEN payment_status = 'Dibayar' AND status <> 'Dibatalkan' THEN total ELSE 0 END), 0) AS revenue
-         FROM orders WHERE DATE(created_at) BETWEEN ? AND ?
+         FROM orders WHERE deleted_at IS NULL AND DATE(created_at) BETWEEN ? AND ?
          GROUP BY payment_method ORDER BY orders DESC`, params
     );
     const [topServices] = await pool.query(
@@ -976,7 +993,7 @@ async function salesReport(req, res, next) {
               COALESCE(SUM(oi.line_total), 0) AS revenue
          FROM order_items oi
          JOIN orders o ON o.id = oi.order_id
-        WHERE DATE(o.created_at) BETWEEN ? AND ?
+        WHERE o.deleted_at IS NULL AND DATE(o.created_at) BETWEEN ? AND ?
           AND o.payment_status = 'Dibayar' AND o.status <> 'Dibatalkan'
         GROUP BY oi.product_name ORDER BY sold DESC, revenue DESC LIMIT 10`, params
     );

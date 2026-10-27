@@ -119,7 +119,7 @@ async function lookupOrder(req, res, next) {
       return res.status(400).json({ message: "Kode pesanan atau nomor WhatsApp tidak valid." });
     }
     const [rows] = await pool.query(
-      "SELECT id, order_code AS orderCode, recipient_phone AS recipientPhone FROM orders WHERE order_code = ? LIMIT 1",
+      "SELECT id, order_code AS orderCode, recipient_phone AS recipientPhone FROM orders WHERE order_code = ? AND deleted_at IS NULL LIMIT 1",
       [orderCode]
     );
     const order = rows[0];
@@ -149,7 +149,7 @@ async function expirePendingOrders() {
     await connection.beginTransaction();
     const [orders] = await connection.query(
       `SELECT id, discount_code AS discountCode FROM orders
-        WHERE payment_status = 'Menunggu pembayaran'
+        WHERE deleted_at IS NULL AND payment_status = 'Menunggu pembayaran'
           AND payment_due_at IS NOT NULL AND payment_due_at <= NOW()
         FOR UPDATE`
     );
@@ -265,7 +265,7 @@ async function createOrder(req, res, next) {
       `SELECT p.id, p.name, p.image, p.price, p.stock, p.duration_minutes AS durationMinutes, ci.quantity AS qty
          FROM cart_items ci
          JOIN products p ON p.id = ci.product_id
-        WHERE ci.cart_id = ? AND p.is_active = 1
+        WHERE ci.cart_id = ? AND p.is_active = 1 AND p.deleted_at IS NULL
         FOR UPDATE`,
       [cartId]
     );
@@ -290,7 +290,7 @@ async function createOrder(req, res, next) {
       const [coupons] = await connection.query(
         `SELECT id, code, discount_type AS discountType, discount_value AS discountValue,
                 minimum_order AS minimumOrder, usage_limit AS usageLimit, used_count AS usedCount
-           FROM coupons WHERE code = ? AND is_active = 1
+           FROM coupons WHERE code = ? AND is_active = 1 AND deleted_at IS NULL
              AND (starts_at IS NULL OR starts_at <= NOW()) AND (ends_at IS NULL OR ends_at >= NOW()) FOR UPDATE`,
         [normalizedCoupon]
       );
@@ -306,12 +306,12 @@ async function createOrder(req, res, next) {
     // Satu terapis/sesi hanya menerima satu booking aktif pada waktu yang sama.
     // Pemeriksaan dilakukan di dalam transaksi agar checkout bersamaan tetap aman.
     const settings = await getBookingSettings(connection);
-    const [therapists] = await connection.query("SELECT id, name FROM therapists WHERE is_active = 1 ORDER BY id FOR UPDATE");
+    const [therapists] = await connection.query("SELECT id, name FROM therapists WHERE is_active = 1 AND deleted_at IS NULL ORDER BY id FOR UPDATE");
     if (!therapists.length) throw new HttpError(409, "Belum ada terapis aktif untuk menerima booking.");
     const [occupiedSlots] = await connection.query(
       `SELECT id, therapist_id AS therapistId, TIME_FORMAT(appointment_time, '%H:%i') AS time,
               service_duration_minutes AS durationMinutes FROM orders
-        WHERE appointment_date = ?
+        WHERE deleted_at IS NULL AND appointment_date = ?
           AND status <> 'Dibatalkan' AND appointment_status <> 'Dibatalkan'
         FOR UPDATE`,
       [appointmentDate]
@@ -450,12 +450,12 @@ async function getAvailability(req, res, next) {
     }
     const durationMinutes = Math.min(480, Math.max(1, Number(req.query.durationMinutes) || 60));
     const settings = await getBookingSettings(pool);
-    const [therapists] = await pool.query("SELECT id, name FROM therapists WHERE is_active = 1 ORDER BY id");
+    const [therapists] = await pool.query("SELECT id, name FROM therapists WHERE is_active = 1 AND deleted_at IS NULL ORDER BY id");
     const [rows] = await pool.query(
       `SELECT therapist_id AS therapistId, TIME_FORMAT(appointment_time, '%H:%i') AS time,
               service_duration_minutes AS durationMinutes
          FROM orders
-        WHERE appointment_date = ? AND status <> 'Dibatalkan'
+        WHERE deleted_at IS NULL AND appointment_date = ? AND status <> 'Dibatalkan'
           AND appointment_status <> 'Dibatalkan'`,
       [date]
     );
@@ -474,7 +474,7 @@ async function requestOrderChange(req, res, next) {
     const reason = String(req.body.reason || "").trim().slice(0, 500) || null;
     if (!Number.isInteger(orderId) || !["reschedule", "cancel"].includes(requestType)) return res.status(400).json({ message: "Permintaan tidak valid." });
     const [orders] = await pool.query(
-      `SELECT id, therapist_id AS therapistId, service_duration_minutes AS durationMinutes FROM orders WHERE id = ? AND ${access.clause} AND status <> 'Dibatalkan' AND appointment_status <> 'Selesai'`,
+      `SELECT id, therapist_id AS therapistId, service_duration_minutes AS durationMinutes FROM orders WHERE id = ? AND deleted_at IS NULL AND ${access.clause} AND status <> 'Dibatalkan' AND appointment_status <> 'Selesai'`,
       [orderId, ...access.values]
     );
     if (!orders.length) return res.status(404).json({ message: "Pesanan tidak dapat diubah." });
@@ -494,10 +494,10 @@ async function requestOrderChange(req, res, next) {
         return res.status(400).json({ message: "Pilih jadwal baru yang belum berlalu." });
       }
       const settings = await getBookingSettings(pool);
-      const [therapists] = await pool.query("SELECT id, name FROM therapists WHERE is_active = 1 ORDER BY id");
+      const [therapists] = await pool.query("SELECT id, name FROM therapists WHERE is_active = 1 AND deleted_at IS NULL ORDER BY id");
       const [occupied] = await pool.query(
         `SELECT therapist_id AS therapistId, TIME_FORMAT(appointment_time, '%H:%i') AS time, service_duration_minutes AS durationMinutes
-           FROM orders WHERE id <> ? AND appointment_date = ?
+           FROM orders WHERE id <> ? AND deleted_at IS NULL AND appointment_date = ?
             AND status <> 'Dibatalkan' AND appointment_status <> 'Dibatalkan'`,
         [orderId, date]
       );
@@ -534,7 +534,7 @@ async function changePaymentMethod(req, res, next) {
               payment_method AS paymentMethod, payment_status AS paymentStatus,
               recipient_name AS recipientName, recipient_email AS recipientEmail,
               recipient_phone AS recipientPhone
-         FROM orders WHERE id = ? AND ${access.clause} FOR UPDATE`,
+         FROM orders WHERE id = ? AND deleted_at IS NULL AND ${access.clause} FOR UPDATE`,
       [req.params.id, ...access.values]
     );
     const order = rows[0];
@@ -628,7 +628,7 @@ async function uploadPaymentProof(req, res, next) {
     const [orders] = await pool.query(
       `SELECT id, order_code AS orderCode, total, payment_method AS paymentMethod,
               payment_status AS paymentStatus, payment_gateway AS paymentGateway
-         FROM orders WHERE id = ? AND ${access.clause}`,
+         FROM orders WHERE id = ? AND deleted_at IS NULL AND ${access.clause}`,
       [req.params.id, ...access.values]
     );
     const order = orders[0];
@@ -672,11 +672,11 @@ async function listOrders(req, res, next) {
               TIME_FORMAT(appointment_time, '%H:%i') AS appointmentTime,
               service_location AS serviceLocation, appointment_status AS appointmentStatus,
               (SELECT t.name FROM therapists t WHERE t.id = orders.therapist_id) AS therapistName,
-              EXISTS(SELECT 1 FROM service_reviews sr WHERE sr.order_id = orders.id) AS hasReview,
+              EXISTS(SELECT 1 FROM service_reviews sr WHERE sr.order_id = orders.id AND sr.deleted_at IS NULL) AS hasReview,
               (SELECT r.status FROM order_change_requests r WHERE r.order_id = orders.id ORDER BY r.created_at DESC LIMIT 1) AS changeRequestStatus,
               (SELECT r.request_type FROM order_change_requests r WHERE r.order_id = orders.id ORDER BY r.created_at DESC LIMIT 1) AS changeRequestType,
               created_at AS createdAt
-         FROM orders WHERE ${whereClause} ORDER BY created_at DESC`,
+         FROM orders WHERE deleted_at IS NULL AND ${whereClause} ORDER BY created_at DESC`,
       values
     );
     if (!orders.length) return res.json([]);
@@ -706,7 +706,7 @@ async function refreshPayment(req, res, next) {
       `SELECT id, order_code AS orderCode, total, payment_method AS paymentMethod,
               payment_status AS paymentStatus, payment_gateway AS paymentGateway,
               payment_reference AS paymentReference
-         FROM orders WHERE id = ? AND ${access.clause}`,
+         FROM orders WHERE id = ? AND deleted_at IS NULL AND ${access.clause}`,
       [req.params.id, ...access.values]
     );
     const order = rows[0];
@@ -727,7 +727,7 @@ async function midtransNotification(req, res, next) {
     if (!verifyNotification(req.body)) return res.status(401).json({ message: "Tanda tangan notifikasi tidak valid." });
     const [rows] = await pool.query(
       `SELECT id, total, payment_status AS paymentStatus FROM orders
-        WHERE COALESCE(payment_reference, order_code) = ? AND payment_method = 'QRIS'`,
+        WHERE deleted_at IS NULL AND COALESCE(payment_reference, order_code) = ? AND payment_method = 'QRIS'`,
       [req.body.order_id]
     );
     const order = rows[0];
